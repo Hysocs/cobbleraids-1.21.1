@@ -6,6 +6,7 @@ import com.cobblemon.mod.common.api.Priority;
 import com.cobblemon.mod.common.api.battles.model.PokemonBattle;
 import com.cobblemon.mod.common.api.battles.model.actor.BattleActor;
 import com.cobblemon.mod.common.api.events.CobblemonEvents;
+import com.cobblemon.mod.common.api.events.pokemon.PokemonCapturedEvent;
 import com.cobblemon.mod.common.api.pokemon.PokemonProperties;
 import com.cobblemon.mod.common.api.pokemon.PokemonSpecies;
 import com.cobblemon.mod.common.api.storage.party.PartyStore;
@@ -13,7 +14,6 @@ import com.cobblemon.mod.common.battles.BattleBuilder;
 import com.cobblemon.mod.common.battles.BattleFormat;
 import com.cobblemon.mod.common.battles.actor.PlayerBattleActor;
 import com.cobblemon.mod.common.battles.actor.PokemonBattleActor;
-import com.cobblemon.mod.common.battles.pokemon.BattlePokemon;
 import com.cobblemon.mod.common.entity.PoseType;
 import com.cobblemon.mod.common.entity.pokemon.PokemonEntity;
 import com.cobblemon.mod.common.pokemon.Pokemon;
@@ -52,7 +52,6 @@ import net.minecraft.server.world.ServerWorld;
 import net.minecraft.text.Text;
 import net.minecraft.util.Identifier;
 import net.minecraft.util.math.Vec3d;
-import net.minecraft.world.Heightmap;
 import net.minecraft.world.World;
 import org.jetbrains.annotations.Nullable;
 import org.slf4j.Logger;
@@ -282,6 +281,16 @@ public class CobbleRaids implements ModInitializer {
         registerCommands();
         registerListeners();
         registerTickEvents();
+
+        CobblemonEvents.POKEMON_CAPTURED.subscribe(Priority.NORMAL, CobbleRaids::onBossCapture);
+    }
+
+    public static Unit onBossCapture(PokemonCapturedEvent event){
+        Pokemon pokemon = event.getPokemon();
+        if(pokemon.getPersistentData().getBoolean("is_cobbleraid_boss")){
+            pokemon.getPersistentData().remove("is_cobbleraid_boss");
+        }
+        return Unit.INSTANCE;
     }
 
     private void registerTickEvents() {
@@ -353,7 +362,11 @@ public class CobbleRaids implements ModInitializer {
             pokemon.setScaleModifier(bossDef.scale);
             pokemon.getCustomProperties().add(UncatchableProperty.INSTANCE.uncatchable());
             PokemonEntity pokemonEntity = new PokemonEntity(world, pokemon, CobblemonEntities.POKEMON);
+
             pokemonEntity.setInvulnerable(true);
+            // Yajat: You were able to kill the mon before battle starts idk thats how its supposed to be
+            pokemonEntity.getPokemon().getPersistentData().putBoolean("is_cobbleraid_boss", true);
+
             pokemonEntity.setNoGravity(true); // Keep if you want floating; remove if you want it grounded
             pokemonEntity.setSilent(true); // Remove if you want sounds (e.g., hurt sounds)
             pokemonEntity.setMovementSpeed(0.0f); // Prevent movement
@@ -630,6 +643,8 @@ public class CobbleRaids implements ModInitializer {
             pokemon.getCustomProperties().add(UncatchableProperty.INSTANCE.uncatchable());
             PokemonEntity pokemonEntity = new PokemonEntity(world, pokemon, CobblemonEntities.POKEMON);
             pokemonEntity.setInvulnerable(true);
+            // Yajat: You were able to kill the mon before battle starts idk thats how its supposed to be
+            pokemonEntity.getPokemon().getPersistentData().putBoolean("is_cobbleraid_boss", true);
             pokemonEntity.setNoGravity(true); // Keep if you want floating; remove if you want it grounded
             pokemonEntity.setSitting(false);
             pokemonEntity.setSilent(true); // Remove if you want sounds (e.g., hurt sounds)
