@@ -536,16 +536,15 @@ public class CobbleRaids implements ModInitializer {
             LOGGER.info("Raid boss {} has been defeated!", raid.getBossEntity().getPokemon().getSpecies().getName());
             player.sendMessage(Text.literal("You have defeated the Raid Boss!"), false);
 
-            // --- Start: Corrected Defeat Logic ---
-            // Capture all necessary data BEFORE the raid object is removed.
+
             Pokemon bossPokemon = bossEntity.getPokemon();
             Vec3d position = bossEntity.getPos();
             ServerWorld world = (ServerWorld) bossEntity.getWorld();
             Map<UUID, Long> damagers = raid.getDamagers();
 
-            // Schedule all world-changing actions to run safely on the main server thread.
+
             world.getServer().execute(() -> {
-                // Step 1: Play the visual effects.
+
                 playDefeatParticles(world, position);
 
                 // Step 2: Set the boss to its "defeated" state.
@@ -560,14 +559,13 @@ public class CobbleRaids implements ModInitializer {
                     bossEntity.getDataTracker().set(PokemonEntity.Companion.getPOSE_TYPE(), PoseType.SLEEP);
                 }
 
-                // Step 3: End the raid management (removes boss bar, etc.).
-                // This no longer despawns the boss because we changed the Raid.end() method.
+
                 raidManager.endRaid(originalBossUuid);
 
-                // Step 4: Distribute rewards to players.
+
                 distributeCatchableBosses(world, bossPokemon, damagers, position);
 
-                // Step 5: Schedule despawn of the original boss after anticipation period (particles stop and catchables spawn)
+
                 timer.schedule(new TimerTask() {
                     @Override
                     public void run() {
@@ -654,7 +652,7 @@ public class CobbleRaids implements ModInitializer {
         }
     }
 
-    // --- Unchanged Methods ---
+
     private void distributeCatchableBosses(ServerWorld world, Pokemon originalBossPokemon, Map<UUID, Long> damagers, Vec3d bossPosition) {
         if (damagers == null || damagers.isEmpty()) {
             LOGGER.warn("No damagers found for boss {}", originalBossPokemon.getSpecies().getName());
