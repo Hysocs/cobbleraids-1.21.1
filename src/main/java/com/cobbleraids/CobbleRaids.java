@@ -5,6 +5,7 @@ import com.cobblemon.mod.common.CobblemonEntities;
 import com.cobblemon.mod.common.api.Priority;
 import com.cobblemon.mod.common.api.battles.model.PokemonBattle;
 import com.cobblemon.mod.common.api.battles.model.actor.BattleActor;
+import com.cobblemon.mod.common.api.drop.DropTable;
 import com.cobblemon.mod.common.api.events.CobblemonEvents;
 import com.cobblemon.mod.common.api.events.pokemon.PokemonCapturedEvent;
 import com.cobblemon.mod.common.api.pokemon.PokemonProperties;
@@ -461,7 +462,7 @@ public class CobbleRaids implements ModInitializer {
 
             if (player != null && potentialBoss != null && raidManager.getRaidByBossUuid(potentialBoss.getUuid()) != null) {
                 LOGGER.info("Intercepting battle with CobbleRaid boss: {}", potentialBoss.getPokemon().getSpecies().getName());
-                event.setReason(Text.literal(""));
+                event.setReason(Text.empty());
                 event.cancel();
                 startRaidBattle(player, potentialBoss);
             }
@@ -613,6 +614,7 @@ public class CobbleRaids implements ModInitializer {
             entity.setAiDisabled(true);
             return Unit.INSTANCE;
         });
+        cloneEntity.setDrops(new DropTable());
 
         if (cloneEntity == null) {
             LOGGER.error("Failed to spawn the raid boss clone for battle.");
