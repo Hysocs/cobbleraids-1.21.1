@@ -1,0 +1,17 @@
+{
+  "required": true,
+  "package": "com.cobbleraids.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "mixins": [
+    "PokemonEntityMixin",
+    "accessors.GoalSelectorAccessor",
+    "accessors.LivingEntityAccessor",
+    "accessors.MobEntityAccessor"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  },
+  "overwrites": {
+    "requireAnnotations": true
+	}
+}
