@@ -13,24 +13,26 @@ This is placeholder until i can set it up, as the set invulnerable inside of cob
  */
 @Mixin(PokemonEntity.class)
 public class PokemonEntityMixin {
-
-
-
 	@Inject(method = "isInvulnerableTo", at = @At("HEAD"), cancellable = true)
 	private void makeRaidBossInvulnerable(DamageSource source, CallbackInfoReturnable<Boolean> cir) {
 
-		PokemonEntity thisEntity = (PokemonEntity) (Object) this;
-		Pokemon pokemon = thisEntity.getPokemon(); // Access the public 'pokemon' field directly.
+		Pokemon pokemon = ((PokemonEntity) (Object) this).getPokemon();
 
 
 		if (pokemon != null) {
 
-			boolean isRaidBoss = pokemon.getPersistentData().getBoolean("is_cobbleraid_boss");
-
-
-			if (isRaidBoss) {
+			if (pokemon.getPersistentData().getBoolean("is_cobbleraid_boss")) {
 				cir.setReturnValue(true);
 			}
+		}
+	}
+
+	@Inject(method = "isPushable", at = @At("HEAD"), cancellable = true)
+	private void makeRaidBossesUnpushable(CallbackInfoReturnable<Boolean> cir){
+		Pokemon pokemon = ((PokemonEntity) (Object) this).getPokemon();
+
+		if(pokemon.getPersistentData().getBoolean("is_cobbleraid_boss")){
+			cir.setReturnValue(false);
 		}
 	}
 }
