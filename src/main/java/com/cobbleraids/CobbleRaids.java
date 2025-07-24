@@ -22,6 +22,7 @@ import com.cobblemon.mod.common.pokemon.properties.UncatchableProperty;
 import com.cobbleraids.config.GeneralRaidConfig;
 import com.cobbleraids.config.RaidBossConfig;
 import com.cobbleraids.goals.BossGoals;
+import com.cobbleraids.api.BossInvulnerabilityAccessor;
 import com.cobbleraids.mixin.accessors.LivingEntityAccessor;
 import com.cobbleraids.utils.config.ConfigManager;
 import com.cobbleraids.utils.config.ConfigMetadata;
@@ -42,6 +43,7 @@ import net.minecraft.entity.boss.BossBar;
 import net.minecraft.entity.boss.ServerBossBar;
 import net.minecraft.entity.effect.StatusEffectInstance;
 import net.minecraft.entity.effect.StatusEffects;
+import net.minecraft.particle.ParticleEffect;
 import net.minecraft.particle.ParticleTypes;
 import net.minecraft.registry.RegistryKey;
 import net.minecraft.registry.RegistryKeys;
@@ -146,7 +148,6 @@ public class CobbleRaids implements ModInitializer {
 
         public void end() {
             bossBar.clearPlayers();
-
         }
 
         public void addPlayerToShowBossBar(ServerPlayerEntity player) {
@@ -172,7 +173,6 @@ public class CobbleRaids implements ModInitializer {
 
         public void setServer(MinecraftServer server) { this.server = server; }
         public void setConfig(GeneralRaidConfig config) { this.generalConfig = config; }
-
 
         public void createRaid(PokemonEntity bossEntity, long maxHealth, long damagePerWin, long despawnTimeSeconds) {
             if (server == null || generalConfig == null) {
@@ -350,7 +350,6 @@ public class CobbleRaids implements ModInitializer {
 
         for (String line : messageLines) {
             String formattedLine = line.replace("{species}", selectedBoss.species).replace("{coords}", coords);
-            // Text.literal() will correctly parse the color codes (e.g., §c, §l)
             server.getPlayerManager().broadcast(Text.literal(formattedLine), false);
         }
     }
@@ -362,23 +361,12 @@ public class CobbleRaids implements ModInitializer {
             pokemon.setLevel(bossDef.level);
             pokemon.setScaleModifier(bossDef.scale);
             pokemon.getCustomProperties().add(UncatchableProperty.INSTANCE.uncatchable());
-            PokemonEntity pokemonEntity = new PokemonEntity(world, pokemon, CobblemonEntities.POKEMON);
-
-            pokemonEntity.setInvulnerable(true);
-            // Yajat: You were able to kill the mon before battle starts idk thats how its supposed to be
-            pokemonEntity.getPokemon().getPersistentData().putBoolean("is_cobbleraid_boss", true);
-
-            pokemonEntity.setNoGravity(true); // Keep if you want floating; remove if you want it grounded
-            pokemonEntity.setSilent(true); // Remove if you want sounds (e.g., hurt sounds)
-            pokemonEntity.setMovementSpeed(0.0f); // Prevent movement
-            pokemonEntity.addStatusEffect(new StatusEffectInstance(StatusEffects.SLOWNESS, -1, 255, false, false)); // Infinite max slowness to immobilize
-            pokemonEntity.setEnablePoseTypeRecalculation(true); // Enable animations
-            pokemonEntity.getDataTracker().set(PokemonEntity.Companion.getPOSE_TYPE(), PoseType.STAND);
+            PokemonEntity pokemonEntity = createImmobilizedPokemonEntity(world, pokemon, true, true, false, true);
             pokemonEntity.refreshPositionAndAngles(pos.getX(), pos.getY(), pos.getZ(), world.getRandom().nextFloat() * 360, 0);
             world.spawnEntity(pokemonEntity);
 
             raidManager.createRaid(pokemonEntity, bossDef.maxHealth, bossDef.damagePerWin, bossDef.despawnTimeSeconds);
-            BossGoals.addBossGoals(pokemonEntity, raidManager.getRaidByBossUuid(pokemonEntity.getUuid())); // Add this
+            BossGoals.addBossGoals(pokemonEntity, raidManager.getRaidByBossUuid(pokemonEntity.getUuid()));
 
             LOGGER.info("Spawned dynamic raid boss: {} at {}", bossDef.species, pos);
         } catch (Exception e) {
@@ -421,7 +409,7 @@ public class CobbleRaids implements ModInitializer {
                                         .then(CommandManager.argument("health", LongArgumentType.longArg(1))
                                                 .then(CommandManager.argument("scale", FloatArgumentType.floatArg(0.1f))
                                                         .then(CommandManager.argument("damagePerWin", LongArgumentType.longArg(1))
-                                                                .then(CommandManager.argument("despawnTimeSeconds", LongArgumentType.longArg(0)) // Set to 0 for no timer
+                                                                .then(CommandManager.argument("despawnTimeSeconds", LongArgumentType.longArg(0))
                                                                         .then(CommandManager.argument("pos", Vec3ArgumentType.vec3())
                                                                                 .suggests((context, builder) -> {
                                                                                     Vec3d pos = context.getSource().getPosition();
@@ -460,6 +448,19 @@ public class CobbleRaids implements ModInitializer {
                 else if (actor instanceof PokemonBattleActor pba) potentialBoss = pba.getEntity();
             }
 
+            if (player != null && potentialBoss != null) {
+                var data = potentialBoss.getPokemon().getPersistentData();
+                if (data.getBoolean("raid_defeated")) {
+                    event.setReason(Text.literal("The raid boss is defeated and resting."));
+                    event.cancel();
+                    return Unit.INSTANCE;
+                } else if (data.getBoolean("raid_catchable")) {
+                    event.setReason(Text.literal("Throw a Poké Ball to catch this Pokémon!"));
+                    event.cancel();
+                    return Unit.INSTANCE;
+                }
+            }
+
             if (player != null && potentialBoss != null && raidManager.getRaidByBossUuid(potentialBoss.getUuid()) != null) {
                 LOGGER.info("Intercepting battle with CobbleRaid boss: {}", potentialBoss.getPokemon().getSpecies().getName());
                 event.setReason(Text.empty());
@@ -485,6 +486,11 @@ public class CobbleRaids implements ModInitializer {
                 if (player != null) {
                     LOGGER.info("Player {} defeated a raid clone.", player.getName().getString());
                     handleRaidDamage(player, originalBossUuid);
+
+                    if (faintedEntity != null) {
+                        faintedEntity.discard();
+                    }
+
                     event.getBattle().end();
                 } else {
                     LOGGER.warn("A raid clone fainted, but no player was found in the battle.");
@@ -541,44 +547,43 @@ public class CobbleRaids implements ModInitializer {
 
         PokemonEntity bossEntity = raid.getBossEntity();
         if (bossEntity != null && !bossEntity.isRemoved()) {
-            bossEntity.setInvulnerable(false);
-            bossEntity.damage(bossEntity.getDamageSources().generic(), 0.0f);
-            bossEntity.setInvulnerable(true);
+            bossEntity.getServer().execute(() -> {
+                BossInvulnerabilityAccessor accessor = (BossInvulnerabilityAccessor) bossEntity;
+                boolean wasInvulnerable = bossEntity.isInvulnerable();
+
+                try {
+                    accessor.cobbleraids_setDamageAllowed(true);
+                    bossEntity.setInvulnerable(false);
+                    bossEntity.damage(bossEntity.getDamageSources().generic(), 0.01F);
+
+                } finally {
+                    bossEntity.setInvulnerable(wasInvulnerable);
+                    accessor.cobbleraids_setDamageAllowed(false);
+                }
+            });
         }
 
         if (raid.isDefeated()) {
             LOGGER.info("Raid boss {} has been defeated!", raid.getBossEntity().getPokemon().getSpecies().getName());
             player.sendMessage(Text.literal("You have defeated the Raid Boss!"), false);
 
-
             Pokemon bossPokemon = bossEntity.getPokemon();
-            Vec3d position = bossEntity.getPos();
             ServerWorld world = (ServerWorld) bossEntity.getWorld();
             Map<UUID, Long> damagers = raid.getDamagers();
 
-
             world.getServer().execute(() -> {
+                playScaledParticles(world, bossEntity);
 
-                playDefeatParticles(world, position);
-
-                // Step 2: Set the boss to its "defeated" state.
                 if (!bossEntity.isRemoved()) {
-                    // Set the pose to FAINTED, which is perfect for this.
-                    bossEntity.getDataTracker().set(PokemonEntity.Companion.getPOSE_TYPE(), PoseType.SLEEP);
-                    // As an alternative, you could use bossEntity.setSitting(true);
-
-                    // Disable its AI to ensure it stops all actions (like looking at players).
+                    bossPokemon.getPersistentData().putBoolean("raid_defeated", true);
                     bossEntity.setAiDisabled(true);
                     bossEntity.setEnablePoseTypeRecalculation(false);
                     bossEntity.getDataTracker().set(PokemonEntity.Companion.getPOSE_TYPE(), PoseType.SLEEP);
                 }
 
-
                 raidManager.endRaid(originalBossUuid);
 
-
-                distributeCatchableBosses(world, bossPokemon, damagers, position);
-
+                distributeCatchableBosses(world, bossEntity, damagers);
 
                 timer.schedule(new TimerTask() {
                     @Override
@@ -614,6 +619,7 @@ public class CobbleRaids implements ModInitializer {
             entity.setAiDisabled(true);
             return Unit.INSTANCE;
         });
+        assert cloneEntity != null;
         cloneEntity.setDrops(new DropTable());
 
         if (cloneEntity == null) {
@@ -643,17 +649,7 @@ public class CobbleRaids implements ModInitializer {
             pokemon.setLevel(level);
             pokemon.setScaleModifier(scale);
             pokemon.getCustomProperties().add(UncatchableProperty.INSTANCE.uncatchable());
-            PokemonEntity pokemonEntity = new PokemonEntity(world, pokemon, CobblemonEntities.POKEMON);
-            pokemonEntity.setInvulnerable(true);
-            // Yajat: You were able to kill the mon before battle starts idk thats how its supposed to be
-            pokemonEntity.getPokemon().getPersistentData().putBoolean("is_cobbleraid_boss", true);
-            pokemonEntity.setNoGravity(true); // Keep if you want floating; remove if you want it grounded
-            pokemonEntity.setSitting(false);
-            pokemonEntity.setSilent(true); // Remove if you want sounds (e.g., hurt sounds)
-            pokemonEntity.setMovementSpeed(0.0f); // Prevent movement
-            pokemonEntity.addStatusEffect(new StatusEffectInstance(StatusEffects.SLOWNESS, -1, 255, false, false)); // Infinite max slowness to immobilize
-            pokemonEntity.setEnablePoseTypeRecalculation(true); // Enable animations
-            pokemonEntity.getDataTracker().set(PokemonEntity.Companion.getPOSE_TYPE(), PoseType.STAND);
+            PokemonEntity pokemonEntity = createImmobilizedPokemonEntity(world, pokemon, true, true, false, true);
             pokemonEntity.refreshPositionAndAngles(pos.getX(), pos.getY(), pos.getZ(), world.getRandom().nextFloat() * 360, 0);
             world.spawnEntity(pokemonEntity);
 
@@ -669,26 +665,35 @@ public class CobbleRaids implements ModInitializer {
         }
     }
 
-
-    private void distributeCatchableBosses(ServerWorld world, Pokemon originalBossPokemon, Map<UUID, Long> damagers, Vec3d bossPosition) {
+    private void distributeCatchableBosses(ServerWorld world, PokemonEntity bossEntity, Map<UUID, Long> damagers) {
         if (damagers == null || damagers.isEmpty()) {
-            LOGGER.warn("No damagers found for boss {}", originalBossPokemon.getSpecies().getName());
+            LOGGER.warn("No damagers found for boss {}", bossEntity.getPokemon().getSpecies().getName());
             return;
         }
         damagers.keySet().forEach(playerUuid -> {
             ServerPlayerEntity player = world.getServer().getPlayerManager().getPlayer(playerUuid);
             if (player != null) {
-                initiateCatchableBossSequence(player, originalBossPokemon, bossPosition);
+                initiateCatchableBossSequence(player, bossEntity);
             }
         });
     }
 
-    private void initiateCatchableBossSequence(ServerPlayerEntity player, Pokemon originalBossPokemon, Vec3d bossPosition) {
+    private void initiateCatchableBossSequence(ServerPlayerEntity player, PokemonEntity bossEntity) {
         UUID playerUuid = player.getUuid();
-        Text initialText = Text.literal("Prepare to catch ").append(originalBossPokemon.getDisplayName()).append("...");
+        Pokemon bossPokemon = bossEntity.getPokemon();
+        Text initialText = Text.literal("Prepare to catch ").append(bossPokemon.getDisplayName()).append("...");
         ServerBossBar anticipationBar = new ServerBossBar(initialText, BossBar.Color.YELLOW, BossBar.Style.PROGRESS);
         anticipationBar.addPlayer(player);
         catchableBossAnticipationBars.put(playerUuid, anticipationBar);
+
+        // Pre-calculate the boss's dimensions for the particle task
+        final float width = bossEntity.getDimensions(bossEntity.getPose()).width();
+        final float height = bossEntity.getDimensions(bossEntity.getPose()).height();
+        final double deltaX = width / 2.0;
+        final double deltaY = height / 2.0;
+        final double deltaZ = width / 2.0;
+        final int particleCount = Math.min(600, (int) (75 * Math.max(1.0f, width * height)));
+
         TimerTask particleTask = new TimerTask() {
             @Override
             public void run() {
@@ -698,10 +703,12 @@ public class CobbleRaids implements ModInitializer {
                 }
                 player.getServer().execute(() -> {
                     ServerWorld world = (ServerWorld) player.getWorld();
-                    world.spawnParticles(ParticleTypes.LARGE_SMOKE, bossPosition.getX(), bossPosition.getY() + 0.5, bossPosition.getZ(), 80, 0.8, 0.8, 0.8, 0.05);
+                    Vec3d center = bossEntity.getBoundingBox().getCenter();
+                    world.spawnParticles(ParticleTypes.TOTEM_OF_UNDYING, center.getX(), center.getY(), center.getZ(), particleCount, deltaX, deltaY, deltaZ, 0.20);
                 });
             }
         };
+
         timer.scheduleAtFixedRate(particleTask, 0, 500L);
         particleTasks.put(playerUuid, particleTask);
         int preCatchDuration = 15;
@@ -715,32 +722,28 @@ public class CobbleRaids implements ModInitializer {
                         catchableBossAnticipationBars.remove(playerUuid);
                         particleTasks.remove(playerUuid).cancel();
                         if (!player.isDisconnected()) {
-                            spawnCatchableBossForPlayer(player, originalBossPokemon);
+                            spawnCatchableBossForPlayer(player, bossPokemon);
                         }
                     });
                     this.cancel();
                     return;
                 }
                 anticipationBar.setPercent((float) countdown / preCatchDuration);
-                Text countdownText = Text.literal("Prepare to catch ").append(originalBossPokemon.getDisplayName()).append(" in " + countdown + "s...");
+                Text countdownText = Text.literal("Prepare to catch ").append(bossPokemon.getDisplayName()).append(" in " + countdown + "s...");
                 anticipationBar.setName(countdownText);
                 countdown--;
             }
         }, 0, 1000L);
     }
 
-    private void spawnCatchableBossForPlayer(ServerPlayerEntity player, Pokemon originalBossPokemon) {
-        Pokemon catchableBossPokemon = PokemonProperties.Companion.parse(originalBossPokemon.getSpecies().getName()).create();
-        catchableBossPokemon.setLevel(originalBossPokemon.getLevel());
-        catchableBossPokemon.setShiny(originalBossPokemon.getShiny());
+    private void spawnCatchableBossForPlayer(ServerPlayerEntity player, Pokemon bossPokemon) {
+        Pokemon catchableBossPokemon = PokemonProperties.Companion.parse(bossPokemon.getSpecies().getName()).create();
+        catchableBossPokemon.setLevel(bossPokemon.getLevel());
+        catchableBossPokemon.setShiny(bossPokemon.getShiny());
         catchableBossPokemon.getCustomProperties().remove(UncatchableProperty.INSTANCE);
-        PokemonEntity catchableBossEntity = new PokemonEntity(player.getWorld(), catchableBossPokemon, CobblemonEntities.POKEMON);
-        catchableBossEntity.setAiDisabled(true);
-        catchableBossEntity.setNoGravity(true);
-        catchableBossEntity.setMovementSpeed(0.0f);
-        catchableBossEntity.addStatusEffect(new StatusEffectInstance(StatusEffects.SLOWNESS, -1, 255, false, false));
-        catchableBossEntity.setEnablePoseTypeRecalculation(false);
-        catchableBossEntity.getDataTracker().set(PokemonEntity.Companion.getPOSE_TYPE(), PoseType.STAND);
+        catchableBossPokemon.getPersistentData().putBoolean("raid_catchable", true);
+        PokemonEntity catchableBossEntity = createImmobilizedPokemonEntity((ServerWorld) player.getWorld(), catchableBossPokemon, false, false, true, false);
+        catchableBossEntity.setDrops(new DropTable());
         Vec3d playerPos = player.getPos();
         Vec3d lookVec = player.getRotationVector();
         Vec3d forwardVec = new Vec3d(lookVec.x, 0, lookVec.z).normalize();
@@ -792,9 +795,30 @@ public class CobbleRaids implements ModInitializer {
         }, 0, 1000L);
     }
 
-    private void playDefeatParticles(ServerWorld world, Vec3d pos) {
-        world.spawnParticles(ParticleTypes.POOF, pos.getX(), pos.getY() + 1.0, pos.getZ(), 150, 0.7, 0.7, 0.7, 0.05);
-        world.spawnParticles(ParticleTypes.EXPLOSION, pos.getX(), pos.getY() + 1.0, pos.getZ(), 10, 0.0, 0.0, 0.0, 0.0);
+    private PokemonEntity createImmobilizedPokemonEntity(ServerWorld world, Pokemon pokemon, boolean invulnerable, boolean silent, boolean aiDisabled, boolean enablePoseRecalc) {
+        PokemonEntity entity = new PokemonEntity(world, pokemon, CobblemonEntities.POKEMON);
+        entity.setInvulnerable(invulnerable);
+        pokemon.getPersistentData().putBoolean("is_cobbleraid_boss", invulnerable);
+        entity.setNoGravity(true);
+        entity.setSilent(silent);
+        entity.setMovementSpeed(0.0f);
+        entity.addStatusEffect(new StatusEffectInstance(StatusEffects.SLOWNESS, -1, 255, false, false));
+        entity.setAiDisabled(aiDisabled);
+        entity.setEnablePoseTypeRecalculation(enablePoseRecalc);
+        entity.getDataTracker().set(PokemonEntity.Companion.getPOSE_TYPE(), PoseType.STAND);
+        return entity;
+    }
+
+    private void playScaledParticles(ServerWorld world, PokemonEntity entity) {
+        float width = entity.getDimensions(entity.getPose()).width();
+        float height = entity.getDimensions(entity.getPose()).height();
+        Vec3d center = entity.getBoundingBox().getCenter();
+        double deltaX = width / 2.0;
+        double deltaY = height / 2.0;
+        double deltaZ = width / 2.0;
+        int scaledPoofCount = Math.min(1200, (int) (150 * Math.max(1.0f, width * height)));
+        world.spawnParticles(ParticleTypes.POOF, center.getX(), center.getY(), center.getZ(), scaledPoofCount, deltaX, deltaY, deltaZ, 0.05);
+        world.spawnParticles(ParticleTypes.EXPLOSION_EMITTER, center.getX(), center.getY(), center.getZ(), 3, deltaX, deltaY, deltaZ, 0.0);
     }
 
     @Nullable
